@@ -5,6 +5,10 @@ const authrouter = require('./routes/auth.routes')
 const accountrouter = require('./routes/account.routes')
 const transactionrouter = require('./routes/transaction.routes')
 
+app.get('/',(req,res)=>{
+    res.send('Welcome to the banking app')
+})
+
 
 app.use(express.json())
 app.use(cookieParser())
