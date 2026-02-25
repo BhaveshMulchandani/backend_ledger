@@ -23,4 +23,27 @@ async function authmiddleware(req,res,next){
 
 }
 
-module.exports = {authmiddleware}
+async function authsystemusermiddleware(req,res,next){
+    const token = req.cookies.token || req.headers.authorization?.split(' ')[1]
+
+    if(!token){
+        return res.status(401).json({message:"Unauthorized"})
+    }
+
+    try {
+        const decoded = jwt.verify(token,process.env.JWT_SECRET)
+        const user = await usermodel.findById(decoded.id).select('+systemuser')
+
+        if(!user.systemuser){
+            return res.status(403).json({message:"Forbidden"})
+        }
+
+        req.user = user 
+
+        return next()
+    } catch (error) {
+        return res.status(401).json({message:"Unauthorized"})
+    }
+}
+
+module.exports = {authmiddleware,authsystemusermiddleware}

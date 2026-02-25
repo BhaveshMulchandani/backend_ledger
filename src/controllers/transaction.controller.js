@@ -1,6 +1,7 @@
 const transactionmodel = require('../models/transaction.model')
 const accountmodel = require('../models/account.model')
 const ledgermodel = require('../models/ledger.model')
+const usermodel = require('../models/user.model')
 const mongoose = require('mongoose')
 
 
@@ -39,7 +40,7 @@ async function createtransaction(req, res) {
 
     if (istransactionexist) {
         if (istransactionexist.status === "COMPLETED") {
-            return res.status(200).json({ message: "transaction already completed", transaction: istransactionexist })
+            return res.status(200).json({ message: "transaction completed successfully", transaction: istransactionexist })
         }
 
         if (istransactionexist.status === "PENDING") {
@@ -70,34 +71,98 @@ async function createtransaction(req, res) {
     const session = await mongoose.startSession()
     session.startTransaction()
 
-    const transaction = await transactionmodel.create({
-        fromaccount,
+    let transaction
+
+    try {
+        transaction = (await transactionmodel.create([{
+            fromaccount,
+            toaccount,
+            amount,
+            idempotencykey,
+            status: "PENDING"
+        }], { session }))[0]
+
+        const debitledgerentry = await ledgermodel.create([{
+            account: fromaccount,
+            amount,
+            type: "DEBIT",
+            transaction: transaction._id
+        }], { session })
+
+        // await (() => {
+        //     return new Promise((resolve) => setTimeout(resolve, 15 * 1000))
+        // })()
+
+        const creditledgerentry = await ledgermodel.create([{
+            account: toaccount,
+            amount,
+            type: "CREDIT",
+            transaction: transaction._id
+        }], { session })
+
+        await transactionmodel.findOneAndUpdate({ _id: transaction._id }, { status: "COMPLETED" }, { session })
+        await session.commitTransaction()
+        session.endSession()
+
+    } catch (error) {
+        return res.status(400).json({ message: "transaction is pending due to some issue, please retry after some time" })
+    }
+}
+
+async function createinitialfundtransaction(req, res) {
+    const { toaccount, amount, idempotencykey } = req.body
+
+    if (!toaccount || !amount || !idempotencykey) {
+        return res.status(400).json({ message: "toaccount, amount and idempotencykey are required" })
+    }
+
+    const touseraccount = await accountmodel.findOne({ _id: toaccount })
+
+    if (!touseraccount) {
+        return res.status(404).json({ message: "toaccount not found" })
+    }
+
+    const fromuseraccount = await accountmodel.findOne({ user: req.user._id })
+
+    if (!fromuseraccount) {
+        return res.status(404).json({ message: "system account not found" })
+    }
+
+    const session = await mongoose.startSession()
+    session.startTransaction()
+
+
+    const transaction = new transactionmodel({
+        fromaccount: fromuseraccount._id,
         toaccount,
         amount,
         idempotencykey,
         status: "PENDING"
-    }, { session })
+    })
 
-    const debitledgerentry = await ledgermodel.create({
-        account: fromaccount,
+    const debitledgerentry = await ledgermodel.create([{
+        account: fromuseraccount._id,
         amount,
         type: "DEBIT",
         transaction: transaction._id
-    }, { session })
+    }], { session })
 
-    const creditledgerentry = await ledgermodel.create({
+    const creditledgerentry = await ledgermodel.create([{
         account: toaccount,
         amount,
         type: "CREDIT",
         transaction: transaction._id
-    }, { session })
+    }], { session })
 
     transaction.status = "COMPLETED"
     await transaction.save({ session })
     await session.commitTransaction()
     session.endSession()
+
+    return res.status(201).json({ message: "initial fund transaction created successfully", transaction })
 }
 
 module.exports = {
-    createtransaction
+    createtransaction,
+    createinitialfundtransaction
 }
